@@ -1,83 +1,63 @@
-import 'main.dart';
 import 'logger.dart';
 
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import 'package:timezone/data/latest_all.dart' as tz;
-import 'package:timezone/timezone.dart' as tz;
+import 'firebase_options.dart';
 
-final FlutterLocalNotificationsPlugin notifier = FlutterLocalNotificationsPlugin();
+const String dailyQuoteTopic = 'daily-quote';
+const String announcementsTopic = 'announcements';
+
+final FirebaseMessaging messaging = FirebaseMessaging.instance;
 
 Future<void> initializeNotifications() async {
-  // Time zones
-  tz.initializeTimeZones();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // initialise the plugin. app_icon needs to be a added as a drawable resource to the Android head project
-  final DarwinInitializationSettings initializationSettingsDarwin = DarwinInitializationSettings();
-  final InitializationSettings initializationSettings = InitializationSettings(
-    iOS: initializationSettingsDarwin,
+  final settings = await messaging.requestPermission();
+  log.info("Notification permission: ${settings.authorizationStatus}");
+
+  // Show pushes as banners even while the app is open (iOS).
+  await messaging.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
   );
-  await notifier.initialize(initializationSettings);
+
+  // Everyone gets announcements; the daily quote is opt-in via the checkbox.
+  await messaging.subscribeToTopic(announcementsTopic);
+
+  await _cancelLegacyLocalNotifications();
 }
 
-Future<void> notifyImmediately(String title, String body) async {
-  final darwinNotificationDetails = DarwinNotificationDetails();
-  final notificationDetails = NotificationDetails(iOS: darwinNotificationDetails);
-  return notifier.show(0, title, body, notificationDetails);
-}
-
-Future<void> notifyAtDate(String title, String body, DateTime date, int id) async {
-  // Check that the date is in the future
-  if (date.difference(DateTime.now()).isNegative) {
-    log.warning("Tried to schedule notification date that occurs in the past.");
-    return Future.value();
-  }
-
-  final darwinNotificationDetails = DarwinNotificationDetails();
-  final notificationDetails = NotificationDetails(iOS: darwinNotificationDetails);
-  tz.TZDateTime scheduledDate = tz.TZDateTime.from(date, tz.getLocation('MST'));
-  final utcString = scheduledDate.toUtc().toIso8601String();
-
-  log.info("Scheduling future notification, id=$id, utc=$utcString");
-  return notifier.zonedSchedule(
-    id,
-    title,
-    body,
-    scheduledDate,
-    notificationDetails,
-    androidScheduleMode: AndroidScheduleMode.exact,
-  );
-}
-
-Future<void> notifyDailyQuoteOnDate(DateTime date) async {
-  Quote? result = await getQuoteFromDate(date);
-  Quote quote = Quote("", "", "");
-  if (result == null) {
-    log.warning("getQuoteFromDate came back null");
-    return Future.value();
-  }
-  quote = result;
-  final epoch = DateTime.utc(1970, 1, 1);
-  final id = date.toUtc().difference(epoch).inDays; // Use days since epoch as ID
-  final title = "Quote of the Day";
-  final body = "${quote.quote} - ${quote.author}";
-  return notifyAtDate(title, body, date, id);
-}
-
-Future<void> registerNQuoteDays(DateTime startDateTime, int numDays) async {
-  for (int i = 0; i < numDays; i++) {
-    final notifyDate = startDateTime.add(Duration(days: i));
-    await notifyDailyQuoteOnDate(notifyDate);
+// Older app versions pre-scheduled up to 50 days of local notifications on
+// this device; clear any still pending so users don't get those on top of
+// the new pushes.
+Future<void> _cancelLegacyLocalNotifications() async {
+  try {
+    final notifier = FlutterLocalNotificationsPlugin();
+    await notifier.initialize(
+      const InitializationSettings(
+        iOS: DarwinInitializationSettings(
+          requestAlertPermission: false,
+          requestBadgePermission: false,
+          requestSoundPermission: false,
+        ),
+      ),
+    );
+    await notifier.cancelAll();
+    log.info("Cancelled legacy scheduled local notifications");
+  } catch (e) {
+    log.warning("Failed to cancel legacy local notifications: $e");
   }
 }
 
-Future<void> descheduleAllNotifications() async {
-  await notifier.cancelAll();
-  log.info("Descheduled all notifications");
+Future<void> subscribeToDailyQuote() async {
+  await messaging.subscribeToTopic(dailyQuoteTopic);
+  log.info("Subscribed to daily quote notifications");
 }
 
-Future<void> notifyQuoteImmediately(Quote quote) async {
-  final title = "Quote of the Day";
-  final body = "${quote.quote} - ${quote.author}";
-  return notifyImmediately(title, body);
+Future<void> unsubscribeFromDailyQuote() async {
+  await messaging.unsubscribeFromTopic(dailyQuoteTopic);
+  log.info("Unsubscribed from daily quote notifications");
 }

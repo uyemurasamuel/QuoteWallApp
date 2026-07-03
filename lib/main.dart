@@ -185,24 +185,11 @@ Widget buildQuoteFutureWidget(Future<Quote?> quoteFuture) {
   );
 }
 
-Future<void> registerFutureNotifications() async {
-  int numDays = 50;
-  int notifyHour = 15; // 3 PM
-  int notifyMinute = 50; // 50
-  final now = DateTime.now();
-  final startTime = DateTime(now.year, now.month, now.day, notifyHour, notifyMinute);
-  await notifications.descheduleAllNotifications();
-  await notifications.registerNQuoteDays(startTime, numDays);
-}
-
 const String EN_NOTIFY_KEY = 'enableNotifications';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   initLogging();
-
-  // Set up notifications (prompt user)
-  notifications.initializeNotifications();
 
   // Get checkbox status
   await PersistentMap.init();
@@ -213,14 +200,17 @@ void main() async {
     await pmap.set(EN_NOTIFY_KEY, true);
   }
 
-  // Register all notifications
-  registerFutureNotifications().then((value) {
-    // If checkbox is unchecked, deschedule notifications
-    log.info("Checking if should deschedule notifications");
-    final pmap2 = PersistentMap.instance;
-    if (pmap2.get(EN_NOTIFY_KEY, defaultValue: false) == false) {
-      notifications.descheduleAllNotifications();
+  // Set up push notifications (prompts user for permission), then sync the
+  // daily quote subscription with the checkbox. Not awaited so the UI can
+  // start while the permission dialog is up.
+  notifications.initializeNotifications().then((_) {
+    if (pmap.get(EN_NOTIFY_KEY, defaultValue: true)) {
+      return notifications.subscribeToDailyQuote();
+    } else {
+      return notifications.unsubscribeFromDailyQuote();
     }
+  }).catchError((e) {
+    log.severe("Notification setup failed: $e");
   });
 
   runApp(const MyApp());
@@ -273,12 +263,12 @@ class _MyHomePageState extends State<MyHomePage> {
 
   void _enableNotifications() {
     log.info("Enabling notifications");
-    registerFutureNotifications();
+    notifications.subscribeToDailyQuote();
   }
 
   void _disableNotifications() {
     log.info("Disabling notifications");
-    notifications.descheduleAllNotifications();
+    notifications.unsubscribeFromDailyQuote();
   }
 
   @override
